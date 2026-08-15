@@ -1,0 +1,5 @@
+window.CONFIG = {
+  API_BASE_URL: '',
+  RESEND_COOLDOWN_SEC: 60,
+  OTP_EXPIRY_SEC: 600
+};
