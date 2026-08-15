@@ -3,117 +3,136 @@ package com.emailbot;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
 import java.io.*;
-import java.net.URI;
+import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Base64;
 
 public class EmailSender {
-    private static final String SMTP_HOST = getEnv("SMTP_HOST", "smtp.gmail.com");
+    private static final int CONNECT_TIMEOUT_MS = 10_000;
+    private static final int READ_TIMEOUT_MS = 15_000;
+    private static final String SMTP_HOST = getEnv("SMTP_HOST", "smtp-relay.brevo.com");
     private static final int SMTP_PORT = Integer.parseInt(getEnv("SMTP_PORT", "587"));
-    private static final String EMAIL_USER = getEnv("EMAIL_USER", "vishwabaddam@gmail.com");
-    private static final String EMAIL_PASS = getEnv("EMAIL_PASS", "hmezfepdhrbnydjl");
+    private static final String EMAIL_USER = getEnv("EMAIL_USER", "baddamvishwa445@gmail.com");
+    private static final String EMAIL_PASS = getEnv("EMAIL_PASS", "");
+    private static final String SENDER_EMAIL = getEnv("BREVO_SENDER_EMAIL", "baddamvishwa445@gmail.com");
     private static final String BREVO_API_KEY = getEnv("BREVO_API_KEY", "");
-    private static final HttpClient HTTP = HttpClient.newHttpClient();
+    private static final HttpClient HTTP = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofMillis(CONNECT_TIMEOUT_MS))
+            .build();
 
     public static boolean sendOTPEmail(String recipientEmail, String userName, String otp) {
-        if (!BREVO_API_KEY.isBlank()) {
-            boolean brevoSent = sendViaBrevo(recipientEmail, userName, otp);
-            if (brevoSent) return true;
-            System.err.println("[OTP WARN] Brevo delivery failed; trying Gmail SMTP fallback...");
+        if (!isValidEmail(recipientEmail)) {
+            System.err.println("[EMAIL ERROR] Refusing to send to an invalid email address: " + recipientEmail);
+            return false;
         }
 
+        String key = BREVO_API_KEY.trim();
+
+        // 1. If key is a Brevo SMTP key (starts with xsmtpsib-)
+        if (key.startsWith("xsmtpsib-")) {
+            System.out.println("[EMAIL LOG] Sending via Brevo SMTP Relay (smtp-relay.brevo.com:587)...");
+            boolean sent = sendViaSmtpHost("smtp-relay.brevo.com", 587, SENDER_EMAIL, key, recipientEmail, userName, otp);
+            if (sent) return true;
+            System.err.println("[EMAIL WARN] Brevo SMTP relay failed.");
+        }
+
+        // 2. If key is a Brevo REST API key (starts with xkeysib-)
+        if (key.startsWith("xkeysib-")) {
+            System.out.println("[EMAIL LOG] Sending via Brevo REST API...");
+            boolean sent = sendViaBrevoApi(recipientEmail, userName, otp);
+            if (sent) return true;
+            System.err.println("[EMAIL WARN] Brevo REST API failed.");
+        }
+
+        // 3. Try standard custom SMTP (Gmail, Brevo, etc.)
         if (!EMAIL_USER.isBlank() && !EMAIL_PASS.isBlank()) {
-            return sendViaSmtp(recipientEmail, userName, otp);
+            System.out.println("[EMAIL LOG] Sending via SMTP (" + SMTP_HOST + ":" + SMTP_PORT + ")...");
+            return sendViaSmtpHost(SMTP_HOST, SMTP_PORT, EMAIL_USER, EMAIL_PASS, recipientEmail, userName, otp);
         }
 
-        System.err.println("[ERROR] Neither Brevo API key nor SMTP credentials (EMAIL_USER/EMAIL_PASS) are configured.");
+        System.err.println("[EMAIL ERROR] No valid email transport succeeded.");
         return false;
     }
 
-    private static boolean sendViaSmtp(String recipientEmail, String userName, String otp) {
-        try (Socket socket = new Socket(SMTP_HOST, SMTP_PORT)) {
+    private static boolean sendViaSmtpHost(String host, int port, String user, String pass, String recipientEmail, String userName, String otp) {
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MS);
+            socket.setSoTimeout(READ_TIMEOUT_MS);
             BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
             BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
 
-            String line = reader.readLine();
-            if (line == null || !line.startsWith("220")) return false;
+            if (requireResponse(reader, "220", "SMTP greeting") == null) return false;
 
             sendCommand(writer, "EHLO localhost");
-            readResponse(reader);
+            if (requireResponse(reader, "250", "EHLO") == null) return false;
 
             sendCommand(writer, "STARTTLS");
-            line = reader.readLine();
-            if (line == null || !line.startsWith("220")) return false;
+            if (requireResponse(reader, "220", "STARTTLS") == null) return false;
 
             SSLSocketFactory sslFactory = (SSLSocketFactory) SSLSocketFactory.getDefault();
-            SSLSocket sslSocket = (SSLSocket) sslFactory.createSocket(socket, SMTP_HOST, SMTP_PORT, true);
-            sslSocket.startHandshake();
+            try (SSLSocket sslSocket = (SSLSocket) sslFactory.createSocket(socket, host, port, true)) {
+                sslSocket.setSoTimeout(READ_TIMEOUT_MS);
+                sslSocket.startHandshake();
 
-            BufferedReader tlsReader = new BufferedReader(new InputStreamReader(sslSocket.getInputStream(), StandardCharsets.UTF_8));
-            BufferedWriter tlsWriter = new BufferedWriter(new OutputStreamWriter(sslSocket.getOutputStream(), StandardCharsets.UTF_8));
+                BufferedReader tlsReader = new BufferedReader(new InputStreamReader(sslSocket.getInputStream(), StandardCharsets.UTF_8));
+                BufferedWriter tlsWriter = new BufferedWriter(new OutputStreamWriter(sslSocket.getOutputStream(), StandardCharsets.UTF_8));
 
-            sendCommand(tlsWriter, "EHLO localhost");
-            readResponse(tlsReader);
+                sendCommand(tlsWriter, "EHLO localhost");
+                if (requireResponse(tlsReader, "250", "TLS EHLO") == null) return false;
 
-            sendCommand(tlsWriter, "AUTH LOGIN");
-            line = tlsReader.readLine();
-            if (line == null || !line.startsWith("334")) return false;
+                sendCommand(tlsWriter, "AUTH LOGIN");
+                if (requireResponse(tlsReader, "334", "AUTH LOGIN") == null) return false;
 
-            sendCommand(tlsWriter, Base64.getEncoder().encodeToString(EMAIL_USER.getBytes(StandardCharsets.UTF_8)));
-            line = tlsReader.readLine();
-            if (line == null || !line.startsWith("334")) return false;
+                sendCommand(tlsWriter, Base64.getEncoder().encodeToString(user.getBytes(StandardCharsets.UTF_8)));
+                if (requireResponse(tlsReader, "334", "SMTP username") == null) return false;
 
-            sendCommand(tlsWriter, Base64.getEncoder().encodeToString(EMAIL_PASS.getBytes(StandardCharsets.UTF_8)));
-            line = tlsReader.readLine();
-            if (line == null || !line.startsWith("235")) {
-                System.err.println("[SMTP ERROR] Authentication failed: " + line);
+                sendCommand(tlsWriter, Base64.getEncoder().encodeToString(pass.getBytes(StandardCharsets.UTF_8)));
+                if (requireResponse(tlsReader, "235", "SMTP authentication") == null) return false;
+
+                sendCommand(tlsWriter, "MAIL FROM:<" + user + ">");
+                if (requireResponse(tlsReader, "250", "MAIL FROM") == null) return false;
+
+                sendCommand(tlsWriter, "RCPT TO:<" + recipientEmail + ">");
+                if (requireResponse(tlsReader, "250", "RCPT TO") == null) return false;
+
+                sendCommand(tlsWriter, "DATA");
+                if (requireResponse(tlsReader, "354", "DATA") == null) return false;
+
+                String subject = "Zenvego Verification Code: " + otp;
+                String bodyHtml = buildHtmlBody(userName, otp);
+
+                tlsWriter.write("From: Zenvego <" + user + ">\r\n");
+                tlsWriter.write("To: <" + recipientEmail + ">\r\n");
+                tlsWriter.write("Subject: " + subject + "\r\n");
+                tlsWriter.write("MIME-Version: 1.0\r\n");
+                tlsWriter.write("Content-Type: text/html; charset=UTF-8\r\n");
+                tlsWriter.write("\r\n");
+                tlsWriter.write(bodyHtml);
+                tlsWriter.write("\r\n.\r\n");
+                tlsWriter.flush();
+
+                if (requireResponse(tlsReader, "250", "message delivery") != null) {
+                    System.out.println("[SUCCESS] Email accepted by " + host + " for delivery to " + recipientEmail);
+                    sendCommand(tlsWriter, "QUIT");
+                    return true;
+                }
+
+                sendCommand(tlsWriter, "QUIT");
                 return false;
             }
-
-            sendCommand(tlsWriter, "MAIL FROM:<" + EMAIL_USER + ">");
-            line = tlsReader.readLine();
-            if (line == null || !line.startsWith("250")) return false;
-
-            sendCommand(tlsWriter, "RCPT TO:<" + recipientEmail + ">");
-            line = tlsReader.readLine();
-            if (line == null || !line.startsWith("250")) return false;
-
-            sendCommand(tlsWriter, "DATA");
-            line = tlsReader.readLine();
-            if (line == null || !line.startsWith("354")) return false;
-
-            String subject = "Zenvego Verification Code: " + otp;
-            String bodyHtml = buildHtmlBody(userName, otp);
-
-            tlsWriter.write("From: Zenvego <" + EMAIL_USER + ">\r\n");
-            tlsWriter.write("To: <" + recipientEmail + ">\r\n");
-            tlsWriter.write("Subject: " + subject + "\r\n");
-            tlsWriter.write("MIME-Version: 1.0\r\n");
-            tlsWriter.write("Content-Type: text/html; charset=UTF-8\r\n");
-            tlsWriter.write("\r\n");
-            tlsWriter.write(bodyHtml);
-            tlsWriter.write("\r\n.\r\n");
-            tlsWriter.flush();
-
-            line = tlsReader.readLine();
-            if (line != null && line.startsWith("250")) {
-                System.out.println("[SUCCESS] Email delivered to " + recipientEmail + " via Gmail SMTP!");
-                return true;
-            }
-
-            sendCommand(tlsWriter, "QUIT");
-            return false;
         } catch (Exception e) {
-            System.err.println("[SMTP ERROR] Sending via SMTP failed: " + e.getMessage());
+            System.err.println("[SMTP ERROR] Sending via SMTP (" + host + ") failed: " + e.getMessage());
             return false;
         }
     }
 
-    private static boolean sendViaBrevo(String recipientEmail, String userName, String otp) {
+    private static boolean sendViaBrevoApi(String recipientEmail, String userName, String otp) {
         try {
             String html = buildHtmlBody(userName, otp);
             String payload = """
@@ -122,7 +141,7 @@ public class EmailSender {
                  "subject":"Zenvego Verification Code: %s",
                  "htmlContent":"%s"}
                 """.formatted(
-                    jsonEscape(EMAIL_USER),
+                    jsonEscape(SENDER_EMAIL),
                     jsonEscape(recipientEmail),
                     jsonEscape(otp),
                     jsonEscape(html)
@@ -133,20 +152,21 @@ public class EmailSender {
                 .header("accept", "application/json")
                 .header("content-type", "application/json")
                 .header("api-key", BREVO_API_KEY)
+                .timeout(Duration.ofMillis(READ_TIMEOUT_MS))
                 .POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8))
                 .build();
 
             HttpResponse<String> response = HTTP.send(request, HttpResponse.BodyHandlers.ofString());
 
             if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                System.out.println("[SUCCESS] Email delivered to " + recipientEmail + " via Brevo API!");
+                System.out.println("[SUCCESS] Email delivered to " + recipientEmail + " via Brevo REST API!");
                 return true;
             }
 
-            System.err.println("[ERROR] Brevo rejected email (" + response.statusCode() + "): " + response.body());
+            System.err.println("[ERROR] Brevo REST API rejected email (" + response.statusCode() + "): " + response.body());
             return false;
         } catch (Exception e) {
-            System.err.println("[ERROR] Brevo request failed: " + e.getMessage());
+            System.err.println("[ERROR] Brevo REST API request failed: " + e.getMessage());
             return false;
         }
     }
@@ -203,11 +223,18 @@ public class EmailSender {
         writer.flush();
     }
 
-    private static void readResponse(BufferedReader reader) throws IOException {
+    private static String requireResponse(BufferedReader reader, String expectedCode, String step) throws IOException {
         String line;
+        String lastLine = null;
         while ((line = reader.readLine()) != null) {
-            if (line.length() >= 4 && line.charAt(3) == ' ') break;
+            lastLine = line;
+            if (line.length() < 4 || line.charAt(3) == ' ') break;
         }
+        if (lastLine == null || !lastLine.startsWith(expectedCode)) {
+            System.err.println("[SMTP ERROR] " + step + " failed: " + lastLine);
+            return null;
+        }
+        return lastLine;
     }
 
     private static String jsonEscape(String value) {
@@ -224,6 +251,10 @@ public class EmailSender {
             .replace("<", "&lt;")
             .replace(">", "&gt;")
             .replace("\"", "&quot;");
+    }
+
+    private static boolean isValidEmail(String value) {
+        return value != null && value.matches("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
     }
 
     private static String getEnv(String name, String fallback) {
