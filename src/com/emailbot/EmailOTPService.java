@@ -1,4 +1,4 @@
-﻿package com.emailbot;
+package com.emailbot;
 
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.Filters;
@@ -23,7 +23,8 @@ public class EmailOTPService {
     }
 
     public static boolean generateAndSendOTP(String email, String userName) {
-        if (email == null) return false;
+        if (email == null)
+            return false;
         String normalizedEmail = email.trim().toLowerCase();
         String otp = OTPGenerator.generateOTP();
 
@@ -33,7 +34,8 @@ public class EmailOTPService {
 
         boolean sent = EmailSender.sendOTPEmail(normalizedEmail, userName, otp);
         if (!sent) {
-            System.err.println("[OTP WARN] Brevo email delivery failed or key missing. OTP " + otp + " saved to in-memory store for fallback verification.");
+            System.err.println("[OTP WARN] Brevo email delivery failed or key missing. OTP " + otp
+                    + " saved to in-memory store for fallback verification.");
         }
 
         Date now = new Date();
@@ -85,8 +87,10 @@ public class EmailOTPService {
                 return false;
             }
             boolean isValid = record.code.equals(normalizedOtp);
-            if (isValid) inMemoryOtps.remove(normalizedEmail);
-            System.out.println("[OTP LOG] Verification " + (isValid ? "SUCCESSFUL" : "FAILED: Code mismatch") + " using in-memory OTP storage");
+            if (isValid)
+                inMemoryOtps.remove(normalizedEmail);
+            System.out.println("[OTP LOG] Verification " + (isValid ? "SUCCESSFUL" : "FAILED: Code mismatch")
+                    + " using in-memory OTP storage");
             System.out.println("------------------------------------------\n");
             return isValid;
         }
@@ -94,7 +98,10 @@ public class EmailOTPService {
         InMemoryOtp inMem = inMemoryOtps.get(normalizedEmail);
         if (inMem != null && !inMem.expiresAt.before(new Date()) && inMem.code.equals(normalizedOtp)) {
             inMemoryOtps.remove(normalizedEmail);
-            try { otpColl.deleteMany(Filters.eq("email", normalizedEmail)); } catch (Exception ignored) {}
+            try {
+                otpColl.deleteMany(Filters.eq("email", normalizedEmail));
+            } catch (Exception ignored) {
+            }
             System.out.println("[OTP LOG] Verification SUCCESSFUL via in-memory cache for " + normalizedEmail);
             return true;
         }
@@ -118,7 +125,8 @@ public class EmailOTPService {
             System.out.println("[OTP LOG] Verification FAILED: OTP expired (> 10 minutes)");
             try {
                 otpColl.deleteMany(Filters.eq("email", normalizedEmail));
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
             System.out.println("------------------------------------------\n");
             return false;
         }
@@ -130,7 +138,8 @@ public class EmailOTPService {
             System.out.println("[OTP LOG] Verification SUCCESSFUL for " + normalizedEmail);
             try {
                 otpColl.deleteMany(Filters.eq("email", normalizedEmail));
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         } else {
             System.out.println("[OTP LOG] Verification FAILED: Code mismatch for " + normalizedEmail);
         }

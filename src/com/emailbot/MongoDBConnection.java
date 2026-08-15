@@ -1,4 +1,4 @@
-﻿package com.emailbot;
+package com.emailbot;
 
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoClientSettings;
