@@ -1,5 +1,7 @@
-package com.emailbot;
+﻿package com.emailbot;
 
+import com.mongodb.ConnectionString;
+import com.mongodb.MongoClientSettings;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
@@ -11,7 +13,6 @@ import org.bson.Document;
 import java.util.concurrent.TimeUnit;
 
 public class MongoDBConnection {
-    private static final String DEFAULT_URI = "mongodb://localhost:27017";
     private static final String DB_NAME = "zenvego";
     private static final String USERS_COLL = "users";
     private static final String OTP_COLL = "otp_verifications";
@@ -26,13 +27,18 @@ public class MongoDBConnection {
     private static synchronized void ensureConnected() {
         if (client == null && !connectionAttempted) {
             connectionAttempted = true;
-            String uri = getEnv("MONGODB_URI", DEFAULT_URI);
-            if (uri.contains("<db_password>")) {
-                System.err.println("[MongoDB] Not configured; continuing with in-memory OTP storage.");
+            String uri = getEnv("MONGODB_URI", "");
+            if (uri.isBlank() || uri.contains("<db_password>") || uri.contains("localhost")) {
+                System.err.println("[MongoDB] MONGODB_URI is empty or points to localhost; using in-memory OTP storage.");
                 return;
             }
             try {
-                client = MongoClients.create(uri);
+                MongoClientSettings settings = MongoClientSettings.builder()
+                        .applyConnectionString(new ConnectionString(uri))
+                        .applyToSocketSettings(builder -> builder.connectTimeout(3, TimeUnit.SECONDS).readTimeout(3, TimeUnit.SECONDS))
+                        .applyToClusterSettings(builder -> builder.serverSelectionTimeout(3, TimeUnit.SECONDS))
+                        .build();
+                client = MongoClients.create(settings);
                 database = client.getDatabase(DB_NAME);
                 System.out.println("[MongoDB] Connected successfully to database: " + DB_NAME);
                 ensureIndexes();

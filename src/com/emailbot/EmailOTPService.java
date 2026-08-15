@@ -1,8 +1,7 @@
-package com.emailbot;
+﻿package com.emailbot;
 
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.Filters;
-import com.mongodb.client.model.Updates;
 import org.bson.Document;
 
 import java.util.Date;
@@ -29,13 +28,12 @@ public class EmailOTPService {
         String otp = OTPGenerator.generateOTP();
 
         System.out.println("\n==========================================");
-        System.out.println("[OTP LOG] Sending OTP to: " + normalizedEmail);
+        System.out.println("[OTP LOG] Sending OTP " + otp + " to: " + normalizedEmail);
         System.out.println("==========================================\n");
 
         boolean sent = EmailSender.sendOTPEmail(normalizedEmail, userName, otp);
         if (!sent) {
-            System.err.println("[OTP ERROR] Failed to send email to " + normalizedEmail);
-            return false;
+            System.err.println("[OTP WARN] Brevo email delivery failed or key missing. OTP " + otp + " saved to in-memory store for fallback verification.");
         }
 
         Date now = new Date();
@@ -52,10 +50,9 @@ public class EmailOTPService {
             } catch (Exception e) {
                 System.err.println("[OTP ERROR] Failed to persist OTP record to MongoDB: " + e.getMessage());
             }
-        } else {
-            inMemoryOtps.put(normalizedEmail, new InMemoryOtp(otp, expiresAt));
-            System.out.println("[OTP LOG] MongoDB unavailable; OTP stored in server memory until expiry.");
         }
+
+        inMemoryOtps.put(normalizedEmail, new InMemoryOtp(otp, expiresAt));
 
         try {
             UserService.findOrCreateUser(normalizedEmail);
@@ -92,6 +89,14 @@ public class EmailOTPService {
             System.out.println("[OTP LOG] Verification " + (isValid ? "SUCCESSFUL" : "FAILED: Code mismatch") + " using in-memory OTP storage");
             System.out.println("------------------------------------------\n");
             return isValid;
+        }
+
+        InMemoryOtp inMem = inMemoryOtps.get(normalizedEmail);
+        if (inMem != null && !inMem.expiresAt.before(new Date()) && inMem.code.equals(normalizedOtp)) {
+            inMemoryOtps.remove(normalizedEmail);
+            try { otpColl.deleteMany(Filters.eq("email", normalizedEmail)); } catch (Exception ignored) {}
+            System.out.println("[OTP LOG] Verification SUCCESSFUL via in-memory cache for " + normalizedEmail);
+            return true;
         }
 
         Document record;
