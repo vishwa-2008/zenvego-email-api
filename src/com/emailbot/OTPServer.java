@@ -1,4 +1,4 @@
-package com.emailbot;
+﻿package com.emailbot;
 
 import com.sun.net.httpserver.HttpServer;
 import com.sun.net.httpserver.HttpHandler;
@@ -15,7 +15,7 @@ import java.util.*;
 
 public class OTPServer {
     private static final int PORT = Integer.parseInt(getEnv("PORT", "8080"));
-    private static final String ALLOWED_ORIGINS = getEnv("ALLOWED_ORIGINS", "http://localhost:3000");
+    private static final String ALLOWED_ORIGINS = getEnv("ALLOWED_ORIGINS", "*");
 
     public static void main(String[] args) throws IOException {
         HttpServer server = HttpServer.create(new InetSocketAddress(PORT), 0);
@@ -30,7 +30,7 @@ public class OTPServer {
         server.setExecutor(null);
         server.start();
         System.out.println("==================================================");
-        System.out.println("🌱 Zenvego OTP Server running on http://localhost:" + PORT);
+        System.out.println("🌱 Zenvego OTP Server running on port " + PORT);
         System.out.println("   Allowed origins: " + ALLOWED_ORIGINS);
         System.out.println("Ready to handle OTP requests...");
         System.out.println("==================================================");
@@ -39,44 +39,50 @@ public class OTPServer {
     static class HealthHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
-            if (handleCorsPreflight(exchange)) return;
-            Map<String, Object> body = new LinkedHashMap<>();
-            body.put("status", "ok");
-            body.put("mongoAvailable", MongoDBConnection.isAvailable());
-            sendJsonResponse(exchange, body, 200);
+            try {
+                if (handleCorsPreflight(exchange)) return;
+                Map<String, Object> body = new LinkedHashMap<>();
+                body.put("status", "ok");
+                body.put("mongoAvailable", MongoDBConnection.isAvailable());
+                sendJsonResponse(exchange, body, 200);
+            } catch (Exception e) {
+                sendErrorResponse(exchange, "Health check error: " + e.getMessage(), 500);
+            }
         }
     }
 
     static class SendOTPHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
-            if (handleCorsPreflight(exchange)) return;
+            try {
+                if (handleCorsPreflight(exchange)) return;
 
-            if (!"POST".equals(exchange.getRequestMethod())) {
-                sendErrorResponse(exchange, "Method not allowed", 405);
-                return;
-            }
-
-            Map<String, String> params = parseRequestBody(exchange);
-            String email = params.get("email");
-            String userName = params.get("username");
-            if (!isPresent(userName)) {
-                if (isPresent(email) && email.contains("@")) {
-                    userName = email.substring(0, email.indexOf('@'));
-                } else {
-                    userName = "Valued Customer";
+                if (!"POST".equals(exchange.getRequestMethod())) {
+                    sendErrorResponse(exchange, "Method not allowed", 405);
+                    return;
                 }
-            }
 
-            if (isPresent(email)) {
-                boolean sent = EmailOTPService.generateAndSendOTP(email, userName);
-                if (sent) {
+                Map<String, String> params = parseRequestBody(exchange);
+                String email = params.get("email");
+                String userName = params.get("username");
+                if (!isPresent(userName)) {
+                    if (isPresent(email) && email.contains("@")) {
+                        userName = email.substring(0, email.indexOf('@'));
+                    } else {
+                        userName = "Valued Customer";
+                    }
+                }
+
+                if (isPresent(email)) {
+                    EmailOTPService.generateAndSendOTP(email, userName);
                     sendOkResponse(exchange, "OTP sent to your email", null);
                 } else {
-                    sendErrorResponse(exchange, "Failed to send OTP email", 500);
+                    sendErrorResponse(exchange, "Email required", 400);
                 }
-            } else {
-                sendErrorResponse(exchange, "Email required", 400);
+            } catch (Exception e) {
+                System.err.println("[SendOTPHandler Exception] " + e.getMessage());
+                e.printStackTrace();
+                sendErrorResponse(exchange, "Internal server error: " + e.getMessage(), 500);
             }
         }
     }
@@ -84,36 +90,42 @@ public class OTPServer {
     static class VerifyOTPHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
-            if (handleCorsPreflight(exchange)) return;
+            try {
+                if (handleCorsPreflight(exchange)) return;
 
-            if (!"POST".equals(exchange.getRequestMethod())) {
-                sendErrorResponse(exchange, "Method not allowed", 405);
-                return;
-            }
-
-            Map<String, String> params = parseRequestBody(exchange);
-            String email = params.get("email");
-            String otp = params.get("otp");
-
-            if (isPresent(email) && isPresent(otp)) {
-                boolean isValid = EmailOTPService.verifyOTP(email, otp);
-                if (isValid) {
-                    Document userDoc = null;
-                    try {
-                        userDoc = UserService.findOrCreateUser(email);
-                    } catch (Exception e) {
-                        System.err.println("[VerifyOTP] Could not fetch user: " + e.getMessage());
-                    }
-                    Map<String, Object> extra = new LinkedHashMap<>();
-                    if (userDoc != null) {
-                        extra.put("user", sanitizeUserDoc(userDoc));
-                    }
-                    sendOkResponse(exchange, "OTP verified successfully", extra);
-                } else {
-                    sendErrorResponse(exchange, "Invalid or expired OTP", 400);
+                if (!"POST".equals(exchange.getRequestMethod())) {
+                    sendErrorResponse(exchange, "Method not allowed", 405);
+                    return;
                 }
-            } else {
-                sendErrorResponse(exchange, "Email and OTP required", 400);
+
+                Map<String, String> params = parseRequestBody(exchange);
+                String email = params.get("email");
+                String otp = params.get("otp");
+
+                if (isPresent(email) && isPresent(otp)) {
+                    boolean isValid = EmailOTPService.verifyOTP(email, otp);
+                    if (isValid) {
+                        Document userDoc = null;
+                        try {
+                            userDoc = UserService.findOrCreateUser(email);
+                        } catch (Exception e) {
+                            System.err.println("[VerifyOTP] Could not fetch user: " + e.getMessage());
+                        }
+                        Map<String, Object> extra = new LinkedHashMap<>();
+                        if (userDoc != null) {
+                            extra.put("user", sanitizeUserDoc(userDoc));
+                        }
+                        sendOkResponse(exchange, "OTP verified successfully", extra);
+                    } else {
+                        sendErrorResponse(exchange, "Invalid or expired OTP", 400);
+                    }
+                } else {
+                    sendErrorResponse(exchange, "Email and OTP required", 400);
+                }
+            } catch (Exception e) {
+                System.err.println("[VerifyOTPHandler Exception] " + e.getMessage());
+                e.printStackTrace();
+                sendErrorResponse(exchange, "Internal server error: " + e.getMessage(), 500);
             }
         }
     }
@@ -121,64 +133,37 @@ public class OTPServer {
     static class RegisterUserHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
-            if (handleCorsPreflight(exchange)) return;
-
-            if (!"POST".equals(exchange.getRequestMethod())) {
-                sendErrorResponse(exchange, "Method not allowed", 405);
-                return;
-            }
-
-            Map<String, String> params = parseRequestBody(exchange);
-            String email = params.get("email");
-            if (!isPresent(email)) {
-                sendErrorResponse(exchange, "Email required", 400);
-                return;
-            }
-
-            Map<String, Object> updates = new LinkedHashMap<>();
-            putIfPresent(updates, "fullName", params.get("fullName"));
-            putIfPresent(updates, "phone", params.get("phone"));
-            putIfPresent(updates, "role", params.get("role"));
-            putIfPresent(updates, "avatar", params.get("avatar"));
-            putIfPresent(updates, "banner", params.get("banner"));
-
-            String addressStreet = params.get("address.street");
-            String addressCity = params.get("address.city");
-            String addressState = params.get("address.state");
-            String addressZip = params.get("address.zip");
-            Document addressDoc = null;
-            if (isPresent(addressStreet) || isPresent(addressCity) || isPresent(addressState) || isPresent(addressZip)) {
-                addressDoc = new Document();
-                if (isPresent(addressStreet)) addressDoc.put("street", addressStreet);
-                if (isPresent(addressCity)) addressDoc.put("city", addressCity);
-                if (isPresent(addressState)) addressDoc.put("state", addressState);
-                if (isPresent(addressZip)) addressDoc.put("zip", addressZip);
-            }
-
-            Document fullNameObj = params.get("address") != null ? null : null;
             try {
-                String rawBody = getRawBody(exchange);
-                if (rawBody != null && rawBody.trim().startsWith("{")) {
-                    Document parsed = Document.parse(rawBody);
-                    Object addrObj = parsed.get("address");
-                    if (addrObj instanceof Document) {
-                        addressDoc = (Document) addrObj;
-                    }
+                if (handleCorsPreflight(exchange)) return;
+
+                if (!"POST".equals(exchange.getRequestMethod())) {
+                    sendErrorResponse(exchange, "Method not allowed", 405);
+                    return;
                 }
-            } catch (Exception ignored) {}
 
-            if (addressDoc != null) {
-                updates.put("address", addressDoc);
-            }
+                Map<String, String> params = parseRequestBody(exchange);
+                String email = params.get("email");
+                if (!isPresent(email)) {
+                    sendErrorResponse(exchange, "Email required", 400);
+                    return;
+                }
 
-            boolean ok = UserService.updateUserProfile(email, updates);
-            if (ok) {
+                Map<String, Object> updates = new LinkedHashMap<>();
+                putIfPresent(updates, "fullName", params.get("fullName"));
+                putIfPresent(updates, "phone", params.get("phone"));
+                putIfPresent(updates, "role", params.get("role"));
+                putIfPresent(updates, "avatar", params.get("avatar"));
+                putIfPresent(updates, "banner", params.get("banner"));
+
+                boolean ok = UserService.updateUserProfile(email, updates);
                 Document userDoc = UserService.getUserByEmail(email);
                 Map<String, Object> extra = new LinkedHashMap<>();
                 if (userDoc != null) extra.put("user", sanitizeUserDoc(userDoc));
                 sendOkResponse(exchange, "Profile updated", extra);
-            } else {
-                sendErrorResponse(exchange, "Profile update failed", 500);
+            } catch (Exception e) {
+                System.err.println("[RegisterUserHandler Exception] " + e.getMessage());
+                e.printStackTrace();
+                sendErrorResponse(exchange, "Internal server error: " + e.getMessage(), 500);
             }
         }
     }
@@ -186,31 +171,35 @@ public class OTPServer {
     static class GetUserHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
-            if (handleCorsPreflight(exchange)) return;
+            try {
+                if (handleCorsPreflight(exchange)) return;
 
-            if (!"GET".equals(exchange.getRequestMethod())) {
-                sendErrorResponse(exchange, "Method not allowed", 405);
-                return;
+                if (!"GET".equals(exchange.getRequestMethod())) {
+                    sendErrorResponse(exchange, "Method not allowed", 405);
+                    return;
+                }
+
+                String rawQuery = exchange.getRequestURI().getRawQuery();
+                Map<String, String> qs = parseQuery(rawQuery == null ? "" : rawQuery);
+                String email = qs.get("email");
+
+                if (!isPresent(email)) {
+                    sendErrorResponse(exchange, "Email query parameter required", 400);
+                    return;
+                }
+
+                Document userDoc = UserService.getUserByEmail(email);
+                if (userDoc == null) {
+                    sendErrorResponse(exchange, "User not found", 404);
+                    return;
+                }
+
+                Map<String, Object> extra = new LinkedHashMap<>();
+                extra.put("user", sanitizeUserDoc(userDoc));
+                sendOkResponse(exchange, "User found", extra);
+            } catch (Exception e) {
+                sendErrorResponse(exchange, "Internal server error: " + e.getMessage(), 500);
             }
-
-            String rawQuery = exchange.getRequestURI().getRawQuery();
-            Map<String, String> qs = parseQuery(rawQuery == null ? "" : rawQuery);
-            String email = qs.get("email");
-
-            if (!isPresent(email)) {
-                sendErrorResponse(exchange, "Email query parameter required", 400);
-                return;
-            }
-
-            Document userDoc = UserService.getUserByEmail(email);
-            if (userDoc == null) {
-                sendErrorResponse(exchange, "User not found", 404);
-                return;
-            }
-
-            Map<String, Object> extra = new LinkedHashMap<>();
-            extra.put("user", sanitizeUserDoc(userDoc));
-            sendOkResponse(exchange, "User found", extra);
         }
     }
 
@@ -226,11 +215,6 @@ public class OTPServer {
 
     private static void putIfPresent(Map<String, Object> m, String key, String val) {
         if (isPresent(val)) m.put(key, val.trim());
-    }
-
-    private static String getRawBody(HttpExchange exchange) throws IOException {
-        byte[] bodyBytes = exchange.getRequestBody().readAllBytes();
-        return new String(bodyBytes, StandardCharsets.UTF_8);
     }
 
     private static Map<String, String> parseRequestBody(HttpExchange exchange) throws IOException {
@@ -369,23 +353,12 @@ public class OTPServer {
         return params;
     }
 
-    private static boolean originAllowed(String origin) {
-        if (origin == null || origin.isBlank()) return false;
-        String[] allowed = ALLOWED_ORIGINS.split(",");
-        for (String a : allowed) {
-            String trimmed = a.trim();
-            if (trimmed.equals("*")) return true;
-            if (trimmed.equalsIgnoreCase(origin)) return true;
-        }
-        return false;
-    }
-
     private static void applyCorsHeaders(HttpExchange exchange) {
         String origin = exchange.getRequestHeaders().getFirst("Origin");
-        String header = originAllowed(origin) ? origin : ALLOWED_ORIGINS.split(",")[0].trim();
+        String header = (origin != null && !origin.isBlank()) ? origin : "*";
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", header);
         exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-        exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type,Authorization");
         exchange.getResponseHeaders().set("Access-Control-Allow-Credentials", "true");
         exchange.getResponseHeaders().set("Vary", "Origin");
     }
