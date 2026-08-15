@@ -1,0 +1,27 @@
+==================================================
+  ZENVEGO BACKEND ENV LOADER + RUNNER
+==================================================
+
+[0/4] Port 8080 is free.
+[1/4] Loading secrets from .env ...
+       SMTP_USER  = vishwabaddam@gmail.com
+       MONGODB_URI = set (112 chars)
+       HTTP PORT  = 8080
+
+[ACTION REQUIRED BEFORE STARTING]
+Open file:  d:\email-otp-bot\.env   in Notepad and fix these:
+   [X] MONGODB_URI still has literal <db_password> -- you MUST paste your REAL Atlas DB password
+
+MongoDB Atlas Password Setup (FREE):
+  1. Go to https://cloud.mongodb.com --> Security --> Database Access
+  2. Edit user:  vishwabaddam_db_user  --> Edit Password
+  3. Set password to:   Zenvego2026   (letters + numbers only, no special symbols)
+  4. Click the green [Update User] button.
+  5. In d:\email-otp-bot\.env, go to line 12.
+     Find the literal text  <db_password>  and DELETE those 12 characters.
+     In its place, type the password you just set:  Zenvego2026
+     Result line 12: mongodb+srv://vishwabaddam_db_user:Zenvego2026@zenevgo.xwebrgt.mongodb.net/zenvego?retryWrites=true&w=majority
+
+  ALSO REQUIRED: Atlas --> Security --> Network Access --> ADD IP ADDRESS
+     Click [ALLOW ACCESS FROM ANYWHERE] --> it adds 0.0.0.0/0 --> confirm.
+

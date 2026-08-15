@@ -1,0 +1,14 @@
+com\emailbot\OTPServer$VerifyOTPHandler.class
+com\emailbot\EmailOTPService$InMemoryOtp.class
+com\emailbot\MongoDBConnection.class
+com\emailbot\OTPGenerator.class
+com\emailbot\OTPServer.class
+com\emailbot\OTPServer$RegisterUserHandler.class
+com\emailbot\UserService.class
+com\emailbot\EmailSender.class
+com\emailbot\OTPServer$StaticFileHandler.class
+com\emailbot\OTPServer$GetUserHandler.class
+com\emailbot\EmailSender$SmtpConnection.class
+com\emailbot\OTPServer$HealthHandler.class
+com\emailbot\OTPServer$SendOTPHandler.class
+com\emailbot\EmailOTPService.class

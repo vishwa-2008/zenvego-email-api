@@ -7,8 +7,8 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 
 public class EmailSender {
-    private static final String BREVO_API_KEY = getEnv("BREVO_API_KEY", "");
-    private static final String SENDER_EMAIL = getEnv("BREVO_SENDER_EMAIL", "");
+    private static final String BREVO_API_KEY = getEnv("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", "");
+    private static final String SENDER_EMAIL = getEnv("vishwabaddam@gmail.com", "30");
     private static final HttpClient HTTP = HttpClient.newHttpClient();
 
     public static boolean sendOTPEmail(String recipientEmail, String userName, String otp) {
